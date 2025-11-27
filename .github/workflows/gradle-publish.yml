@@ -12,7 +12,8 @@ jobs:
       packages: write
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout sources
+        uses: actions/checkout@v4
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -31,17 +32,30 @@ jobs:
       - name: Build with Gradle
         run: ./gradlew build
 
-      - name: Get Gradle version
+      # Nécessite la tâche printVersion dans ton build.gradle :
+      # task printVersion {
+      #     doLast { println project.version }
+      # }
+      - name: Get Gradle project version
         id: get_version
-        run: echo "version=$(./gradlew -q printVersion)" >> $GITHUB_OUTPUT
+        run: echo "version=$(./gradlew -q printVersion)" >> "$GITHUB_OUTPUT"
 
       - name: Rename JAR to PopulaireCoreGL-version-package.jar
         run: |
           VERSION="${{ steps.get_version.outputs.version }}"
-          ORIGINAL_JAR=$(find build/libs -name "*.jar" | head -n 1)
-          TARGET="PopulaireCoreGL-${VERSION}-package.jar"
+          echo "Project version: $VERSION"
+
+          # Cherche le JAR principal dans build/libs (en excluant sources/javadoc si présents)
+          ORIGINAL_JAR=$(find build/libs -maxdepth 1 -type f -name "*.jar" ! -name "*-sources.jar" ! -name "*-javadoc.jar" | head -n 1)
+
+          if [ -z "$ORIGINAL_JAR" ]; then
+            echo "Aucun JAR trouvé dans build/libs"
+            exit 1
+          fi
+
+          TARGET="build/libs/PopulaireCoreGL-${VERSION}-package.jar"
+          echo "Renommage de $ORIGINAL_JAR vers $TARGET"
           mv "$ORIGINAL_JAR" "$TARGET"
-          echo "Renamed to $TARGET"
 
       - name: Publish to GitHub Packages
         run: ./gradlew publish
@@ -49,9 +63,8 @@ jobs:
           USERNAME: ${{ github.actor }}
           TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # Optional: upload as downloadable artifact
-      - name: Upload renamed JAR
+      - name: Upload renamed JAR as artifact
         uses: actions/upload-artifact@v4
         with:
-          name: PopulaireCoreGL
-          path: PopulaireCoreGL-*-package.jar
+          name: PopulaireCoreGL-jar
+          path: build/libs/PopulaireCoreGL-*-package.jar
