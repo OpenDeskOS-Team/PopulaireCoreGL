@@ -16,6 +16,10 @@ import java.util.List;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.stream.Collectors;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonParser;
+import com.google.gson.Gson;
 
 public class BIOS {
     private boolean fullscreen = true;
@@ -315,6 +319,8 @@ public class BIOS {
         String cpuInfo = "CPU: " + cpuName;
         String gpuName = org.lwjgl.opengl.GL11.glGetString(org.lwjgl.opengl.GL11.GL_RENDERER);
         String gpuInfo = "GPU: " + (gpuName != null ? gpuName : "Java OpenGL");
+        String gpuDriverVersion = org.lwjgl.opengl.GL11.glGetString(org.lwjgl.opengl.GL11.GL_VERSION);
+        String gpuDriverInfo = "Version driver GPU: " + (gpuDriverVersion != null ? gpuDriverVersion : "N/A");
 
         long maxMem = Runtime.getRuntime().maxMemory() / (1024 * 1024);
         long totalMem = Runtime.getRuntime().totalMemory() / (1024 * 1024);
@@ -344,7 +350,7 @@ public class BIOS {
 
         String header = "=== Populaire Core BIOS Informations ===";
         String version = "Version BIOS: " + PPCoreSharedConstant.version;
-        String[] infos = {cpuInfo, gpuInfo, ramInfo, javaInfo, ramUsage, cpuUsage, gpuUsage, space, header, version};
+        String[] infos = {cpuInfo, gpuInfo, gpuDriverInfo, ramInfo, javaInfo, ramUsage, cpuUsage, gpuUsage, space, header, version};
         for (String info : infos) {
             TextRenderer.drawText(info, x, y + line * (font.getSize2D() + 10), font, java.awt.Color.WHITE);
             line++;
@@ -361,7 +367,7 @@ public class BIOS {
             new Thread(() -> {
                 try {
                     String json = Updater.readUrlToString(jsonUrl);
-                    remoteVersion = Updater.extractRemoteVersion(json, project);
+                    remoteVersion = BIOS.extractRemoteVersion(json, project);
                     updateAvailable = (remoteVersion != null && !remoteVersion.equals(localVersion));
                     updateMessage = updateAvailable ? ("Nouvelle version disponible: " + remoteVersion + " (Entrée pour mettre à jour)") : "Votre version est à jour.";
                 } catch (Exception e) {
@@ -565,23 +571,17 @@ public class BIOS {
     }
 
     public static String extractRemoteVersion(String json, String projectName) {
-        String projetsKey = "\"projets\"";
-        int projetsIdx = json.indexOf(projetsKey);
-        if (projetsIdx < 0) return null;
-        int projectIdx = json.indexOf('"' + projectName + '"', projetsIdx);
-        if (projectIdx < 0) return null;
-        int projectStart = json.indexOf('{', projectIdx);
-        int projectEnd = json.indexOf('}', projectStart);
-        if (projectStart < 0 || projectEnd < 0) return null;
-        String projectBlock = json.substring(projectStart, projectEnd);
-        String cvKey = "\"current_version\"";
-        int cvIdx = projectBlock.indexOf(cvKey);
-        if (cvIdx < 0) return null;
-        int cvColon = projectBlock.indexOf(':', cvIdx);
-        int cvQuote1 = projectBlock.indexOf('"', cvColon);
-        int cvQuote2 = projectBlock.indexOf('"', cvQuote1 + 1);
-        if (cvColon < 0 || cvQuote1 < 0 || cvQuote2 < 0) return null;
-        return projectBlock.substring(cvQuote1 + 1, cvQuote2);
+        JsonObject root = JsonParser.parseString(json).getAsJsonObject();
+        if (!root.has("projets")) return null;
+        JsonObject projets = root.getAsJsonObject("projets");
+        if (!projets.has(projectName)) return null;
+        JsonObject project = projets.getAsJsonObject(projectName);
+        if (!project.has("current_version")) return null;
+        return project.get("current_version").getAsString();
+    }
+
+    public static Update getUpdateInfo(String json) {
+        return new Gson().fromJson(json, Update.class);
     }
 
     private void relaunchWithUpdatedJar() {

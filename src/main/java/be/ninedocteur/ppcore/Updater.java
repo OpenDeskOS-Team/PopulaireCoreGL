@@ -1,5 +1,7 @@
 package be.ninedocteur.ppcore;
 
+import com.google.gson.Gson;
+
 import java.io.*;
 import java.net.HttpURLConnection;
 import java.net.URL;
@@ -16,12 +18,70 @@ public class Updater {
      */
     public static void downloadLastVersion(String jsonUrl, String projectName, String jarTargetPath) throws IOException {
         String json = readUrlToString(jsonUrl);
-        String jarUrl = extractJarUrl(json, projectName);
+        String jarUrl = extractJarUrlWithGson(json, projectName);
         if (jarUrl == null) throw new IOException("Aucune version trouvée pour le projet: " + projectName);
         File tempFile = File.createTempFile("ppcore_update", ".jar");
         downloadFile(jarUrl, tempFile);
         File target = new File(jarTargetPath);
-        Files.move(tempFile.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING);
+        try {
+            Files.move(tempFile.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING);
+        } catch (IOException e) {
+            // Si le JAR est en cours d'utilisation, on tente la mise à jour différée via un script batch
+            prepareAndLaunchUpdateScript(tempFile, target);
+            return;
+        }
+    }
+
+    private static void prepareAndLaunchUpdateScript(File tempFile, File targetJar) throws IOException {
+        String os = System.getProperty("os.name").toLowerCase();
+        if (os.contains("win")) {
+            // Script batch Windows
+            File script = File.createTempFile("update_launcher", ".bat");
+            String scriptContent = "@echo off\r\n"
+                + "setlocal\r\n"
+                + "set JAR_PATH=\"" + targetJar.getAbsolutePath() + "\"\r\n"
+                + "set NEW_JAR=\"" + tempFile.getAbsolutePath() + "\"\r\n"
+                + ":loop\r\n"
+                + "del %JAR_PATH% >nul 2>&1\r\n"
+                + "if exist %JAR_PATH% (\r\n"
+                + "    timeout /t 2 >nul\r\n"
+                + "    goto loop\r\n"
+                + ")\r\n"
+                + "move /Y %NEW_JAR% %JAR_PATH%\r\n"
+                + "start \"\" java -jar %JAR_PATH%\r\n"
+                + "endlocal\r\n";
+            try (FileWriter fw = new FileWriter(script)) {
+                fw.write(scriptContent);
+            }
+            new ProcessBuilder("cmd", "/c", script.getAbsolutePath()).start();
+        } else {
+            // Script shell Linux/macOS
+            File script = File.createTempFile("update_launcher", ".sh");
+            String scriptContent = "#!/bin/sh\n"
+                + "JAR_PATH=\"" + targetJar.getAbsolutePath() + "\"\n"
+                + "NEW_JAR=\"" + tempFile.getAbsolutePath() + "\"\n"
+                + "while [ -f $JAR_PATH ] && lsof $JAR_PATH >/dev/null 2>&1; do\n"
+                + "  sleep 2\n"
+                + "done\n"
+                + "mv -f $NEW_JAR $JAR_PATH\n"
+                + "nohup java -jar $JAR_PATH &\n";
+            try (FileWriter fw = new FileWriter(script)) {
+                fw.write(scriptContent);
+            }
+            script.setExecutable(true);
+            new ProcessBuilder("sh", script.getAbsolutePath()).start();
+        }
+        System.exit(0);
+    }
+
+    private static String extractJarUrlWithGson(String json, String projectName) {
+        Update update = new Gson().fromJson(json, Update.class);
+        if (update == null || update.projets == null) return null;
+        Update.UpdateProject project = update.projets.get(projectName);
+        if (project == null || project.current_version == null || project.version_history == null) return null;
+        Update.UpdateVersion version = project.version_history.get(project.current_version);
+        if (version == null || version.file_url == null) return null;
+        return version.file_url;
     }
 
     static String readUrlToString(String urlStr) throws IOException {
@@ -45,64 +105,11 @@ public class Updater {
         }
     }
 
-    private static String extractJarUrl(String json, String projectName) {
-        String projetsKey = "\"projets\"";
-        int projetsIdx = json.indexOf(projetsKey);
-        if (projetsIdx < 0) return null;
-        int projectIdx = json.indexOf('"' + projectName + '"', projetsIdx);
-        if (projectIdx < 0) return null;
-        int projectStart = json.indexOf('{', projectIdx);
-        int projectEnd = json.indexOf('}', projectStart);
-        if (projectStart < 0 || projectEnd < 0) return null;
-        String projectBlock = json.substring(projectStart, projectEnd);
-        String cvKey = "\"current_version\"";
-        int cvIdx = projectBlock.indexOf(cvKey);
-        if (cvIdx < 0) return null;
-        int cvColon = projectBlock.indexOf(':', cvIdx);
-        int cvQuote1 = projectBlock.indexOf('"', cvColon);
-        int cvQuote2 = projectBlock.indexOf('"', cvQuote1 + 1);
-        if (cvColon < 0 || cvQuote1 < 0 || cvQuote2 < 0) return null;
-        String currentVersion = projectBlock.substring(cvQuote1 + 1, cvQuote2);
-        String vhKey = "\"version_history\"";
-        int vhIdx = projectBlock.indexOf(vhKey);
-        if (vhIdx < 0) return null;
-        int vhStart = projectBlock.indexOf('{', vhIdx);
-        int vhEnd = projectBlock.indexOf('}', vhStart);
-        if (vhStart < 0 || vhEnd < 0) return null;
-        String vhBlock = projectBlock.substring(vhStart, vhEnd);
-        int verIdx = vhBlock.indexOf('"' + currentVersion + '"');
-        if (verIdx < 0) return null;
-        int verStart = vhBlock.indexOf('{', verIdx);
-        int verEnd = vhBlock.indexOf('}', verStart);
-        if (verStart < 0 || verEnd < 0) return null;
-        String verBlock = vhBlock.substring(verStart, verEnd);
-        String fuKey = "\"file_url\"";
-        int fuIdx = verBlock.indexOf(fuKey);
-        if (fuIdx < 0) return null;
-        int fuColon = verBlock.indexOf(':', fuIdx);
-        int fuQuote1 = verBlock.indexOf('"', fuColon);
-        int fuQuote2 = verBlock.indexOf('"', fuQuote1 + 1);
-        if (fuColon < 0 || fuQuote1 < 0 || fuQuote2 < 0) return null;
-        return verBlock.substring(fuQuote1 + 1, fuQuote2);
-    }
-
     public static String extractRemoteVersion(String json, String projectName) {
-        String projetsKey = "\"projets\"";
-        int projetsIdx = json.indexOf(projetsKey);
-        if (projetsIdx < 0) return null;
-        int projectIdx = json.indexOf('"' + projectName + '"', projetsIdx);
-        if (projectIdx < 0) return null;
-        int projectStart = json.indexOf('{', projectIdx);
-        int projectEnd = json.indexOf('}', projectStart);
-        if (projectStart < 0 || projectEnd < 0) return null;
-        String projectBlock = json.substring(projectStart, projectEnd);
-        String cvKey = "\"current_version\"";
-        int cvIdx = projectBlock.indexOf(cvKey);
-        if (cvIdx < 0) return null;
-        int cvColon = projectBlock.indexOf(':', cvIdx);
-        int cvQuote1 = projectBlock.indexOf('"', cvColon);
-        int cvQuote2 = projectBlock.indexOf('"', cvQuote1 + 1);
-        if (cvColon < 0 || cvQuote1 < 0 || cvQuote2 < 0) return null;
-        return projectBlock.substring(cvQuote1 + 1, cvQuote2);
+        Update update = new Gson().fromJson(json, Update.class);
+        if (update == null || update.projets == null) return null;
+        Update.UpdateProject project = update.projets.get(projectName);
+        if (project == null || project.current_version == null) return null;
+        return project.current_version;
     }
 }
