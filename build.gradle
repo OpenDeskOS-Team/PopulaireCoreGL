@@ -1,0 +1,76 @@
+plugins {
+    id 'java'
+}
+
+group = 'fr.ninedocteur'
+version = '1.0-SNAPSHOT'
+def lwjglVersion = '2.9.3'
+
+repositories {
+    mavenCentral()
+    maven { url 'https://raw.githubusercontent.com/Shadowfacts/maven-repo/master' }
+
+}
+
+dependencies {
+    implementation fileTree(dir: 'libs', include: ['*.jar'], exclude: [
+        'lwjgl*.jar',
+        'jogl*.jar',
+        'gluegen*.jar'
+    ])
+    implementation "org.lwjgl.lwjgl:lwjgl:${lwjglVersion}"
+    runtimeOnly "org.lwjgl.lwjgl:lwjgl-platform:${lwjglVersion}:natives-windows"
+    testImplementation platform('org.junit:junit-bom:5.10.0')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+}
+
+test {
+    useJUnitPlatform()
+}
+
+tasks.register('runApp', JavaExec) {
+    group = 'application'
+    description = 'Lance Main avec les DLL natives.'
+    mainClass = 'be.ninedocteur.ppcore.Main'
+    classpath = sourceSets.main.runtimeClasspath
+    // executable = "C:/Program Files/Java/corretto-1.8.0_392/bin/java.exe" // Décommente et adapte ce chemin si tu as Java 8
+    jvmArgs = [
+        "-Djava.library.path=${projectDir}/libs/natives",
+        "-Dorg.lwjgl.librarypath=${projectDir}/libs/natives",
+        "-Dorg.lwjgl.util.Debug=true"
+    ]
+}
+
+jar {
+    manifest {
+        attributes(
+            'Main-Class': 'be.ninedocteur.ppcore.Main'
+        )
+    }
+    from {
+        configurations.runtimeClasspath.collect { it.isDirectory() ? it : zipTree(it) }
+    }
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+}
+
+tasks.register('runInTestFolder') {
+    group = 'application'
+    description = 'Exporte le jar dans le dossier de test et le lance.'
+    dependsOn jar
+    doLast {
+        def jarFile = jar.archiveFile.get().asFile
+        def destDir = file('C:/Users/loris/OneDrive - UCL/Bureau/PPGl')
+        destDir.mkdirs()
+        def destFile = new File(destDir, jarFile.name)
+        jarFile.withInputStream { is ->
+            destFile.withOutputStream { os ->
+                os << is
+            }
+        }
+        println "Jar exporté dans: ${destFile.absolutePath}"
+        def javaExe = 'java'
+        def process = [javaExe, '-jar', destFile.absolutePath].execute()
+        process.consumeProcessOutput(System.out, System.err)
+        process.waitFor()
+    }
+}
