@@ -48,14 +48,12 @@ public class BootMenuScreen implements Screen {
                 } else if (key == org.lwjgl.input.Keyboard.KEY_RETURN && !bios.getDetectedDisks().isEmpty()) {
                     java.io.File disk = bios.getDetectedDisks().get(bios.getBootMenuSelection());
                     Main.bootExternalOS(new String[]{disk.getAbsolutePath()});
-                    // Après boot, retour à l'écran de post
                     bios.showPostScreen();
                     return;
                 } else if (key == org.lwjgl.input.Keyboard.KEY_ESCAPE) {
                     bios.showPostScreen();
                     return;
                 }
-                // Plein écran
                 if (key == org.lwjgl.input.Keyboard.KEY_F11) {
                     bios.toggleFullscreen();
                 }

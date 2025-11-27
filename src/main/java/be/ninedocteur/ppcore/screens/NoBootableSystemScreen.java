@@ -36,7 +36,6 @@ public class NoBootableSystemScreen implements Screen {
                     bios.showPostScreen();
                     return;
                 }
-                // Plein écran
                 if (key == org.lwjgl.input.Keyboard.KEY_F11) {
                     bios.toggleFullscreen();
                 }

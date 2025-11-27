@@ -3,7 +3,6 @@ package be.ninedocteur.ppcore;
 import be.ninedocteur.ppcore.screens.PostScreen;
 import be.ninedocteur.ppcore.screens.BIOSScreen;
 import be.ninedocteur.ppcore.screens.BootMenuScreen;
-import be.ninedocteur.ppcore.screens.NoBootableSystemScreen;
 import be.ninedocteur.ppcore.utils.Screen;import be.ninedocteur.ppcore.utils.TextRenderer;import be.ninedocteur.ppcore.utils.Updater;import org.lwjgl.LWJGLException;
 import org.lwjgl.input.Keyboard;
 import org.lwjgl.opengl.Display;
@@ -13,7 +12,13 @@ import org.lwjgl.opengl.PixelFormat;
 import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
-import be.ninedocteur.ppcore.utils.UpdateManager;
+import java.io.FileWriter;
+import java.io.FileReader;
+import java.io.IOException;
+import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 
 public class BIOS {
     private boolean fullscreen = true;
@@ -44,7 +49,13 @@ public class BIOS {
     private DiskScanner diskScanner = new DiskScanner();
     private Screen currentScreen;
 
+    private boolean fastBootEnabled = false;
+    private int allocatedRamMB = (int)(Runtime.getRuntime().maxMemory() / (1024 * 1024)); // Par défaut, max JVM
+    public static final String BUILD_DATE = "2025-11-27"; // À ajuster dynamiquement si besoin
+    private String systemUUID;
+
     public void run() {
+        loadConfigFromJson();
         bootOrderManager.loadBootOrderConfig();
         detectedDisks = diskScanner.scanDisks();
         bootOrder = bootOrderManager.getBootOrder();
@@ -56,6 +67,43 @@ public class BIOS {
         currentScreen = new PostScreen(this, intelXeBugDetected, INTEL_XE_WARNING, showBootText);
         loop();
         Display.destroy();
+    }
+
+    @SuppressWarnings("unchecked")
+    public void saveConfigToJson() {
+        Gson gson = new GsonBuilder().setPrettyPrinting().create();
+        JsonObject obj = new JsonObject();
+        obj.addProperty("fastBootEnabled", fastBootEnabled);
+        obj.addProperty("allocatedRamMB", allocatedRamMB);
+        // Save bootOrder as JSON array
+        com.google.gson.JsonArray bootOrderArray = new com.google.gson.JsonArray();
+        for (String disk : bootOrder) {
+            bootOrderArray.add(disk);
+        }
+        obj.add("bootOrder", bootOrderArray);
+        try (FileWriter file = new FileWriter(CONFIG_FILE)) {
+            gson.toJson(obj, file);
+        } catch (IOException e) {
+            System.err.println("Error while saving BIOS config: " + e.getMessage());
+        }
+    }
+
+    public void loadConfigFromJson() {
+        Gson gson = new Gson();
+        try (FileReader reader = new FileReader(CONFIG_FILE)) {
+            JsonObject jsonObject = JsonParser.parseReader(reader).getAsJsonObject();
+            if (jsonObject.has("fastBootEnabled")) fastBootEnabled = jsonObject.get("fastBootEnabled").getAsBoolean();
+            if (jsonObject.has("allocatedRamMB")) allocatedRamMB = jsonObject.get("allocatedRamMB").getAsInt();
+            if (jsonObject.has("bootOrder")) {
+                bootOrder.clear();
+                com.google.gson.JsonArray bootOrderArray = jsonObject.getAsJsonArray("bootOrder");
+                for (int i = 0; i < bootOrderArray.size(); i++) {
+                    bootOrder.add(bootOrderArray.get(i).getAsString());
+                }
+            }
+        } catch (IOException e) {
+            // File missing or invalid: use defaults
+        }
     }
 
     private void detectIntelXeBug() {
@@ -74,6 +122,8 @@ public class BIOS {
             setOrtho();
             GL11.glEnable(GL11.GL_BLEND);
             GL11.glBlendFunc(GL11.GL_SRC_ALPHA, GL11.GL_ONE_MINUS_SRC_ALPHA);
+            // Générer le systemUUID maintenant que le contexte OpenGL existe
+            this.systemUUID = generateSystemUUID();
         } catch (LWJGLException e) {
             throw new RuntimeException(e);
         }
@@ -137,73 +187,6 @@ public class BIOS {
         }
     }
 
-    public void renderSplashScreen() {
-        int w = Display.getWidth();
-        int h = Display.getHeight();
-        float mainFontSize = Math.max(24, h / 10f);
-        float infoFontSize = Math.max(12, h / 30f);
-        java.awt.Font mainFont = null;
-        java.awt.Font infoFont = null;
-        try {
-            mainFont = java.awt.Font.createFont(java.awt.Font.TRUETYPE_FONT, getClass().getResourceAsStream("/VGA.ttf")).deriveFont(mainFontSize);
-            infoFont = java.awt.Font.createFont(java.awt.Font.TRUETYPE_FONT, getClass().getResourceAsStream("/VGA.ttf")).deriveFont(infoFontSize);
-        } catch (Exception e) {
-            mainFont = new java.awt.Font("Monospaced", java.awt.Font.PLAIN, (int)mainFontSize);
-            infoFont = new java.awt.Font("Monospaced", java.awt.Font.PLAIN, (int)infoFontSize);
-        }
-        if (intelXeBugDetected) {
-            float warnFontSize = Math.max(14, h / 40f);
-            java.awt.Font warnFont;
-            try {
-                warnFont = java.awt.Font.createFont(java.awt.Font.TRUETYPE_FONT, getClass().getResourceAsStream("/VGA.ttf")).deriveFont(warnFontSize);
-            } catch (Exception e) {
-                warnFont = new java.awt.Font("Monospaced", java.awt.Font.PLAIN, (int)warnFontSize);
-            }
-            float rectX = 40;
-            float rectY = 10;
-            float rectW = w - 80;
-            List<String> lines = TextRenderer.wrapTextToWidth(INTEL_XE_WARNING, warnFont, rectW - 20);
-            float lineHeight = warnFont.getSize2D() + 4;
-            float rectH = lines.size() * lineHeight + 40;
-            GL11.glColor3f(1f, 0f, 0f);
-            GL11.glBegin(GL11.GL_QUADS);
-            GL11.glVertex2f(rectX, rectY);
-            GL11.glVertex2f(rectX + rectW, rectY);
-            GL11.glVertex2f(rectX + rectW, rectY + rectH);
-            GL11.glVertex2f(rectX, rectY + rectH);
-            GL11.glEnd();
-            GL11.glColor3f(1f, 1f, 1f);
-            GL11.glLineWidth(2f);
-            GL11.glBegin(GL11.GL_LINE_LOOP);
-            GL11.glVertex2f(rectX, rectY);
-            GL11.glVertex2f(rectX + rectW, rectY);
-            GL11.glVertex2f(rectX + rectW, rectY + rectH);
-            GL11.glVertex2f(rectX, rectY + rectH);
-            GL11.glEnd();
-            float textY = rectY + 10 + warnFont.getSize2D();
-            for (String line : lines) {
-                float textW = TextRenderer.getTextWidth(line, warnFont);
-                float textX = rectX + (rectW - textW) / 2f;
-                TextRenderer.drawText(line, textX, textY, warnFont, java.awt.Color.WHITE);
-                textY += lineHeight;
-            }
-        }
-        String mainText = "PopulaireCore";
-        float mainTextWidth = TextRenderer.getTextWidth(mainText, mainFont);
-        float mainTextHeight = TextRenderer.getTextHeight(mainText, mainFont);
-        float mainX = (w - mainTextWidth) / 2f;
-        float mainY = (h - mainTextHeight) / 2f;
-        String infoText = "Press F2 or DELETE to enter setup. Press F12 to enter boot menu.";
-        float infoTextWidth = TextRenderer.getTextWidth(infoText, infoFont);
-        float infoTextHeight = TextRenderer.getTextHeight(infoText, infoFont);
-        float infoX = (w - infoTextWidth) / 2f;
-        float infoY = h - infoTextHeight - 40;
-        TextRenderer.drawText(mainText, mainX, mainY, mainFont, new java.awt.Color(0,255,0));
-        if (showBootText) {
-            TextRenderer.drawText(infoText, infoX, infoY, infoFont, java.awt.Color.WHITE);
-        }
-    }
-
     public void showPostScreen() {
         showBootText = true;
         splashStartTime = System.currentTimeMillis();
@@ -215,36 +198,11 @@ public class BIOS {
     public void showBootMenuScreen() {
         currentScreen = new BootMenuScreen(this);
     }
-    public void showNoBootableSystemScreen() {
-        currentScreen = new NoBootableSystemScreen(this);
-    }
-
-    private void handleInput() {
-        // La gestion de l'input est maintenant entièrement déléguée à l'écran courant
-        if (currentScreen != null) {
-            currentScreen.handleInput();
-        }
-    }
 
     public void restart() {
-        biosTabIndex = 0;
-        updateAvailable = false;
-        remoteVersion = null;
-        updateInProgress = false;
-        updateMessage = null;
-        detectedDisks.clear();
-        bootOrderSelection = 0;
-        bootOrderChanged = false;
-        showBootText = true;
-        splashStartTime = System.currentTimeMillis();
-        forceRedraw = true;
-        bootOrderManager.loadBootOrderConfig();
-        detectedDisks = diskScanner.scanDisks();
-        bootOrder = bootOrderManager.getBootOrder();
-        // DO NOT CALL init() neither Display.create()
-        splashStartTime = System.currentTimeMillis();
-        showBootText = true;
-        loop();
+        saveConfigToJson();
+        loadConfigFromJson();
+        showPostScreen();
     }
 
     public void shutdown() {
@@ -264,6 +222,45 @@ public class BIOS {
     }
 
 
+    public BIOS() {
+        // Ne pas générer le systemUUID ici, car le contexte OpenGL n'est pas encore créé
+    }
+    private String generateSystemUUID() {
+        String cpu = getCpuModel();
+        String gpu = getGpuModel();
+        String base = cpu + ":" + gpu;
+        return java.util.UUID.nameUUIDFromBytes(base.getBytes()).toString();
+    }
+    public String getSystemUUID() {
+        return systemUUID != null ? systemUUID : "(UUID non initialisé)";
+    }
+    public String getCpuModel() {
+        String cpu = System.getenv("PROCESSOR_IDENTIFIER");
+        if (cpu != null && !cpu.isEmpty()) return cpu;
+        try {
+            java.lang.management.OperatingSystemMXBean osBean = java.lang.management.ManagementFactory.getOperatingSystemMXBean();
+            java.lang.reflect.Method method = osBean.getClass().getMethod("getName");
+            return method.invoke(osBean).toString();
+        } catch (Exception e) {
+            return System.getProperty("os.arch");
+        }
+    }
+    public String getGpuModel() {
+        String gpu = org.lwjgl.opengl.GL11.glGetString(org.lwjgl.opengl.GL11.GL_RENDERER);
+        return gpu != null ? gpu : "Unknown GPU";
+    }
+    public boolean isFastBootEnabled() {
+        return fastBootEnabled;
+    }
+    public void setFastBootEnabled(boolean enabled) {
+        this.fastBootEnabled = enabled;
+    }
+    public int getAllocatedRamMB() {
+        return allocatedRamMB;
+    }
+    public void setAllocatedRamMB(int mb) {
+        this.allocatedRamMB = mb;
+    }
     public int getBiosTabIndex() { return biosTabIndex; }
     public void setBiosTabIndex(int value) { this.biosTabIndex = value; }
     public static String[] getBiosTabs() { return BIOS_TABS; }

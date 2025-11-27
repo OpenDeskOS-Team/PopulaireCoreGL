@@ -8,6 +8,10 @@ import java.util.Collections;
 
 public class BIOSScreen implements Screen {
     private final BIOS bios;
+    private int advancedSelection = 0; // 0: Secure Boot, 1: Fast Boot, 2: RAM
+    private boolean advancedMiniGuiOpen = false;
+    private int miniGuiValueIndex = 0;
+    private static final int[] RAM_CHOICES_MB = {2048, 4096, 8192, 16384, 32768, 65536};
 
     public BIOSScreen(BIOS bios) {
         this.bios = bios;
@@ -48,6 +52,7 @@ public class BIOSScreen implements Screen {
         org.lwjgl.opengl.GL11.glEnd();
         if (bios.getBiosTabIndex() == 0) renderBiosInfoTab(contentFont, boxX + 20, boxY + 30);
         else if (bios.getBiosTabIndex() == 1) renderBiosBootTab(contentFont, boxX + 20, boxY + 30, boxW - 40);
+        else if (bios.getBiosTabIndex() == 2) renderBiosAdvancedTab(contentFont, boxX + 20, boxY + 30, w, h);
         else if (bios.getBiosTabIndex() == 3) renderBiosUpdatesTab(contentFont, boxX + 20, boxY + 30, boxW - 40);
         else if (bios.getBiosTabIndex() == 4) renderBiosExitTab(contentFont, boxX + 20, boxY + 30);
     }
@@ -92,34 +97,42 @@ public class BIOSScreen implements Screen {
             }
             y += rectH + 10;
         }
-        String cpuName = System.getProperty("os.arch");
-        String cpuInfo = "CPU: " + cpuName;
-        String gpuName = org.lwjgl.opengl.GL11.glGetString(org.lwjgl.opengl.GL11.GL_RENDERER);
-        String gpuInfo = "GPU: " + (gpuName != null ? gpuName : "Java OpenGL");
+        String cpuModel = bios.getCpuModel();
+        String cpuInfo = "CPU Model: " + cpuModel;
+        String gpuModel = bios.getGpuModel();
+        String gpuInfo = "GPU: " + gpuModel;
         String gpuDriverVersion = org.lwjgl.opengl.GL11.glGetString(org.lwjgl.opengl.GL11.GL_VERSION);
-        String gpuDriverInfo = "Version driver GPU: " + (gpuDriverVersion != null ? gpuDriverVersion : "N/A");
-        long maxMem = Runtime.getRuntime().maxMemory() / (1024 * 1024);
-        long totalMem = Runtime.getRuntime().totalMemory() / (1024 * 1024);
-        long freeMem = Runtime.getRuntime().freeMemory() / (1024 * 1024);
-        long usedMem = totalMem - freeMem;
-        String ramInfo = String.format("RAM JVM: %d MB (utilisée: %d MB / max: %d MB)", totalMem, usedMem, maxMem);
-        String javaInfo = "Java: " + System.getProperty("java.version");
-        int ramPercent = (int) ((usedMem * 100) / maxMem);
-        String ramUsage = String.format("Utilisation RAM: %d%%", ramPercent);
-        String cpuUsage = "Utilisation CPU: N/A";
+        String gpuDriverInfo = "GPU Driver Version: " + (gpuDriverVersion != null ? gpuDriverVersion : "N/A");
+        int screenW = org.lwjgl.opengl.Display.getWidth();
+        int screenH = org.lwjgl.opengl.Display.getHeight();
+        String screenInfo = "Screen Size: " + screenW + "x" + screenH;
+        String buildDate = "Build Date: " + be.ninedocteur.ppcore.BIOS.BUILD_DATE;
+        long totalRam = Runtime.getRuntime().maxMemory() / (1024 * 1024); // JVM RAM
+        long installedRam = 0;
         try {
-            com.sun.management.OperatingSystemMXBean osBean =
-                (com.sun.management.OperatingSystemMXBean) java.lang.management.ManagementFactory.getOperatingSystemMXBean();
-            double cpuLoad = osBean.getProcessCpuLoad();
-            if (cpuLoad >= 0) {
-                cpuUsage = String.format("Utilisation CPU: %.1f%%", cpuLoad * 100);
+            java.lang.management.OperatingSystemMXBean osBean = java.lang.management.ManagementFactory.getOperatingSystemMXBean();
+            if (osBean instanceof com.sun.management.OperatingSystemMXBean) {
+                installedRam = ((com.sun.management.OperatingSystemMXBean) osBean).getTotalPhysicalMemorySize() / (1024 * 1024);
             }
-        } catch (Exception ignored) {}
-        String gpuUsage = "Utilisation GPU: N/A";
-        String space = "     ";
-        String header = "=== Populaire Core BIOS Informations ===";
-        String version = "Version BIOS: " + be.ninedocteur.ppcore.PPCoreSharedConstant.version;
-        String[] infos = {cpuInfo, gpuInfo, gpuDriverInfo, ramInfo, javaInfo, ramUsage, cpuUsage, gpuUsage, space, header, version};
+        } catch (Exception e) {
+            installedRam = 0;
+        }
+        String ramInfo = "Installed RAM: " + installedRam + " MB";
+        String ramAllocated = "RAM Allocated to PopulaireCoreGL: " + bios.getAllocatedRamMB() + " MB";
+        int diskCount = bios.getDetectedDisks().size();
+        String diskInfo = "Disks Detected: " + diskCount;
+        String uuidInfo = "System UUID: " + bios.getSystemUUID();
+        String[] infos = {
+            cpuInfo,
+            gpuInfo,
+            gpuDriverInfo,
+            screenInfo,
+            buildDate,
+            ramInfo,
+            ramAllocated,
+            diskInfo,
+            uuidInfo
+        };
         for (String info : infos) {
             be.ninedocteur.ppcore.utils.TextRenderer.drawText(info, x, y + line * (font.getSize2D() + 10), font, java.awt.Color.WHITE);
             line++;
@@ -131,29 +144,29 @@ public class BIOSScreen implements Screen {
         String project = "ppcore";
         String localVersion = be.ninedocteur.ppcore.PPCoreSharedConstant.version;
         if (bios.getUpdateMessage() == null && !bios.isUpdateInProgress()) {
-            bios.setUpdateMessage("Vérification de la version distante...");
+            bios.setUpdateMessage("Checking remote version...");
             new Thread(() -> {
                 try {
                     String json = be.ninedocteur.ppcore.utils.Updater.readUrlToString(jsonUrl);
                     String remoteVersion = be.ninedocteur.ppcore.utils.UpdateManager.extractRemoteVersion(json, project);
                     boolean updateAvailable = (remoteVersion != null && !remoteVersion.equals(localVersion));
                     bios.setUpdateAvailable(updateAvailable);
-                    bios.setUpdateMessage(updateAvailable ? ("Nouvelle version disponible: " + remoteVersion + " (Entrée pour mettre à jour)") : "Votre version est à jour.");
+                    bios.setUpdateMessage(updateAvailable ? ("New version available: " + remoteVersion + " (Enter to update)") : "Your version is up to date.");
                 } catch (Exception e) {
-                    bios.setUpdateMessage("Erreur lors de la vérification: " + e.getMessage());
+                    bios.setUpdateMessage("Error while checking: " + e.getMessage());
                 }
             }).start();
         }
-        be.ninedocteur.ppcore.utils.TextRenderer.drawText("Mise à jour PopulaireCoreGL", x, y, font, java.awt.Color.YELLOW);
-        be.ninedocteur.ppcore.utils.TextRenderer.drawText("Version locale: " + localVersion, x, y + font.getSize2D() + 10, font, java.awt.Color.WHITE);
+        be.ninedocteur.ppcore.utils.TextRenderer.drawText("PopulaireCoreGL Update", x, y, font, java.awt.Color.YELLOW);
+        be.ninedocteur.ppcore.utils.TextRenderer.drawText("Local version: " + localVersion, x, y + font.getSize2D() + 10, font, java.awt.Color.WHITE);
         be.ninedocteur.ppcore.utils.TextRenderer.drawText(bios.getUpdateMessage() != null ? bios.getUpdateMessage() : "", x, y + 2 * (font.getSize2D() + 10), font, java.awt.Color.CYAN);
         if (bios.isUpdateInProgress()) {
-            be.ninedocteur.ppcore.utils.TextRenderer.drawText("Téléchargement et installation en cours...", x, y + 4 * (font.getSize2D() + 10), font, java.awt.Color.ORANGE);
+            be.ninedocteur.ppcore.utils.TextRenderer.drawText("Downloading and installing...", x, y + 4 * (font.getSize2D() + 10), font, java.awt.Color.ORANGE);
         }
     }
 
     private void renderBiosBootTab(java.awt.Font font, float x, float y, float w) {
-        be.ninedocteur.ppcore.utils.TextRenderer.drawText("Boot Order (haut/bas pour changer, Entrée pour sauvegarder)", x, y, font, java.awt.Color.YELLOW);
+        be.ninedocteur.ppcore.utils.TextRenderer.drawText("Boot Order (up/down to change, Enter to save)", x, y, font, java.awt.Color.YELLOW);
         int line = 1;
         java.util.List<java.io.File> disks = bios.getDetectedDisks();
         for (int i = 0; i < disks.size(); i++) {
@@ -164,20 +177,67 @@ public class BIOSScreen implements Screen {
             line++;
         }
         if (bios.isBootOrderChanged()) {
-            be.ninedocteur.ppcore.utils.TextRenderer.drawText("(Non sauvegardé)", x, y + (line+1) * (font.getSize2D() + 10), font, java.awt.Color.ORANGE);
+            be.ninedocteur.ppcore.utils.TextRenderer.drawText("(Not saved)", x, y + (line+1) * (font.getSize2D() + 10), font, java.awt.Color.ORANGE);
+        }
+    }
+
+    private void renderBiosAdvancedTab(java.awt.Font font, float x, float y, int screenW, int screenH) {
+        String[] options = {
+            "Secure Boot: [AVAILABLE SOON]",
+            "Fast Boot: " + (bios.isFastBootEnabled() ? "ENABLED" : "DISABLED"),
+            "RAM: " + bios.getAllocatedRamMB() + " MB"
+        };
+        for (int i = 0; i < options.length; i++) {
+            java.awt.Color color = (i == advancedSelection) ? java.awt.Color.YELLOW : java.awt.Color.WHITE;
+            be.ninedocteur.ppcore.utils.TextRenderer.drawText(options[i], x, y + i * (font.getSize2D() + 20), font, color);
+        }
+        be.ninedocteur.ppcore.utils.TextRenderer.drawText("Use Up/Down to navigate, Enter to edit.", x, y + options.length * (font.getSize2D() + 30), font, java.awt.Color.CYAN);
+        // Mini-GUI
+        if (advancedMiniGuiOpen) {
+            float rectW = 400, rectH = 120;
+            float rectX = (screenW - rectW) / 2f;
+            float rectY = (screenH - rectH) / 2f;
+            org.lwjgl.opengl.GL11.glColor3f(0.1f, 0.2f, 0.7f);
+            org.lwjgl.opengl.GL11.glBegin(org.lwjgl.opengl.GL11.GL_QUADS);
+            org.lwjgl.opengl.GL11.glVertex2f(rectX, rectY);
+            org.lwjgl.opengl.GL11.glVertex2f(rectX + rectW, rectY);
+            org.lwjgl.opengl.GL11.glVertex2f(rectX + rectW, rectY + rectH);
+            org.lwjgl.opengl.GL11.glVertex2f(rectX, rectY + rectH);
+            org.lwjgl.opengl.GL11.glEnd();
+            org.lwjgl.opengl.GL11.glColor3f(1f, 1f, 1f);
+            org.lwjgl.opengl.GL11.glLineWidth(2f);
+            org.lwjgl.opengl.GL11.glBegin(org.lwjgl.opengl.GL11.GL_LINE_LOOP);
+            org.lwjgl.opengl.GL11.glVertex2f(rectX, rectY);
+            org.lwjgl.opengl.GL11.glVertex2f(rectX + rectW, rectY);
+            org.lwjgl.opengl.GL11.glVertex2f(rectX + rectW, rectY + rectH);
+            org.lwjgl.opengl.GL11.glVertex2f(rectX, rectY + rectH);
+            org.lwjgl.opengl.GL11.glEnd();
+            String label = "";
+            if (advancedSelection == 1) {
+                label = "Fast Boot: " + (miniGuiValueIndex == 1 ? "ENABLED" : "DISABLED");
+            } else if (advancedSelection == 2) {
+                label = "RAM: " + RAM_CHOICES_MB[miniGuiValueIndex] + " MB";
+            }
+            be.ninedocteur.ppcore.utils.TextRenderer.drawText("Edit", rectX + 30, rectY + 30, font, java.awt.Color.YELLOW);
+            be.ninedocteur.ppcore.utils.TextRenderer.drawText(label, rectX + 30, rectY + 60, font, java.awt.Color.WHITE);
+            // Shorter help text, centered
+            String helpText = "←/→ change, Enter validate, Esc cancel";
+            float helpTextWidth = be.ninedocteur.ppcore.utils.TextRenderer.getTextWidth(helpText, font);
+            float helpTextX = rectX + (rectW - helpTextWidth) / 2f;
+            be.ninedocteur.ppcore.utils.TextRenderer.drawText(helpText, helpTextX, rectY + 90, font, java.awt.Color.CYAN);
         }
     }
 
     private void renderBiosExitTab(java.awt.Font font, float x, float y) {
         String[] options = {
-            "Exit saving changes (enregistre, quitte le BIOS, redémarre)",
-            "Exit without saving changes (quitte le BIOS, redémarre)"
+            "Exit saving changes (save, exit BIOS, reboot)",
+            "Exit without saving changes (exit BIOS, reboot)"
         };
         for (int i = 0; i < options.length; i++) {
             java.awt.Color color = (i == bios.getExitSelection()) ? java.awt.Color.YELLOW : java.awt.Color.WHITE;
             be.ninedocteur.ppcore.utils.TextRenderer.drawText(options[i], x, y + i * (font.getSize2D() + 20), font, color);
         }
-        be.ninedocteur.ppcore.utils.TextRenderer.drawText("Utilise Haut/Bas pour choisir, Entrée pour valider.", x, y + options.length * (font.getSize2D() + 30), font, java.awt.Color.CYAN);
+        be.ninedocteur.ppcore.utils.TextRenderer.drawText("Use Up/Down to select, Enter to validate.", x, y + options.length * (font.getSize2D() + 30), font, java.awt.Color.CYAN);
     }
 
     @Override
@@ -186,65 +246,86 @@ public class BIOSScreen implements Screen {
             if (org.lwjgl.input.Keyboard.getEventKeyState()) {
                 int key = org.lwjgl.input.Keyboard.getEventKey();
                 // Navigation entre onglets
-                if (key == org.lwjgl.input.Keyboard.KEY_LEFT) {
-                    bios.setBiosTabIndex((bios.getBiosTabIndex() + BIOS.getBiosTabs().length - 1) % BIOS.getBiosTabs().length);
-                } else if (key == org.lwjgl.input.Keyboard.KEY_RIGHT) {
-                    bios.setBiosTabIndex((bios.getBiosTabIndex() + 1) % BIOS.getBiosTabs().length);
-                } else if (bios.getBiosTabIndex() == 1) { // Onglet Boot
-                    if (key == org.lwjgl.input.Keyboard.KEY_UP) {
-                        if (bios.getBootOrderSelection() > 0) {
-                            Collections.swap(bios.getDetectedDisks(), bios.getBootOrderSelection(), bios.getBootOrderSelection() - 1);
-                            bios.setBootOrderSelection(bios.getBootOrderSelection() - 1);
-                            bios.setBootOrderChanged(true);
-                        }
-                    } else if (key == org.lwjgl.input.Keyboard.KEY_DOWN) {
-                        if (bios.getBootOrderSelection() < bios.getDetectedDisks().size() - 1) {
-                            Collections.swap(bios.getDetectedDisks(), bios.getBootOrderSelection(), bios.getBootOrderSelection() + 1);
-                            bios.setBootOrderSelection(bios.getBootOrderSelection() + 1);
-                            bios.setBootOrderChanged(true);
-                        }
-                    } else if (key == org.lwjgl.input.Keyboard.KEY_RETURN && bios.isBootOrderChanged()) {
-                        bios.saveBootOrderConfig();
-                        bios.setBootOrderChanged(false);
+                if (!advancedMiniGuiOpen) {
+                    if (key == org.lwjgl.input.Keyboard.KEY_LEFT) {
+                        bios.setBiosTabIndex((bios.getBiosTabIndex() + BIOS.getBiosTabs().length - 1) % BIOS.getBiosTabs().length);
+                        return;
+                    } else if (key == org.lwjgl.input.Keyboard.KEY_RIGHT) {
+                        bios.setBiosTabIndex((bios.getBiosTabIndex() + 1) % BIOS.getBiosTabs().length);
+                        return;
                     }
-                } else if (bios.getBiosTabIndex() == 3 && key == org.lwjgl.input.Keyboard.KEY_RETURN && bios.isUpdateAvailable() && !bios.isUpdateInProgress()) {
-                    bios.setUpdateInProgress(true);
-                    bios.setUpdateMessage("Téléchargement en cours...");
-                    new Thread(() -> {
-                        try {
-                            Updater.downloadLastVersion(
-                                "https://raw.githubusercontent.com/OpenDeskOS-Team/OpenDesk-Updater/refs/heads/main/update_index.json",
-                                "ppcore",
-                                new java.io.File(BIOS.class.getProtectionDomain().getCodeSource().getLocation().toURI()).getPath()
-                            );
-                            bios.setUpdateMessage("Mise à jour terminée. Redémarrage...");
-                            bios.relaunchWithUpdatedJar();
-                        } catch (Exception e) {
-                            bios.setUpdateMessage("Erreur MAJ: " + e.getMessage());
-                            bios.setUpdateInProgress(false);
+                }
+                // Onglet Advanced
+                if (bios.getBiosTabIndex() == 2) {
+                    if (!advancedMiniGuiOpen) {
+                        if (key == org.lwjgl.input.Keyboard.KEY_UP) {
+                            advancedSelection = (advancedSelection + 2) % 3;
+                        } else if (key == org.lwjgl.input.Keyboard.KEY_DOWN) {
+                            advancedSelection = (advancedSelection + 1) % 3;
+                        } else if (key == org.lwjgl.input.Keyboard.KEY_RETURN) {
+                            if (advancedSelection == 1) { // Fast Boot
+                                miniGuiValueIndex = bios.isFastBootEnabled() ? 1 : 0;
+                                advancedMiniGuiOpen = true;
+                            } else if (advancedSelection == 2) { // RAM
+                                int current = bios.getAllocatedRamMB();
+                                miniGuiValueIndex = 0;
+                                for (int i = 0; i < RAM_CHOICES_MB.length; i++) {
+                                    if (RAM_CHOICES_MB[i] >= current) { miniGuiValueIndex = i; break; }
+                                }
+                                advancedMiniGuiOpen = true;
+                            }
                         }
-                    }).start();
-                } else if (bios.getBiosTabIndex() == 4) { // Onglet Exit
-                    if (key == org.lwjgl.input.Keyboard.KEY_UP) {
-                        bios.setExitSelection((bios.getExitSelection() + 1) % 2);
-                    } else if (key == org.lwjgl.input.Keyboard.KEY_DOWN) {
-                        bios.setExitSelection((bios.getExitSelection() + 1) % 2);
-                    } else if (key == org.lwjgl.input.Keyboard.KEY_RETURN) {
-                        if (bios.getExitSelection() == 0) {
-                            bios.saveBootOrderConfig();
-                            bios.restart();
-                        } else {
-                            bios.restart();
+                    } else {
+                        if (advancedSelection == 1) { // Fast Boot
+                            if (key == org.lwjgl.input.Keyboard.KEY_LEFT || key == org.lwjgl.input.Keyboard.KEY_RIGHT) {
+                                miniGuiValueIndex = 1 - miniGuiValueIndex;
+                            } else if (key == org.lwjgl.input.Keyboard.KEY_RETURN) {
+                                bios.setFastBootEnabled(miniGuiValueIndex == 1);
+                                bios.saveConfigToJson();
+                                advancedMiniGuiOpen = false;
+                            } else if (key == org.lwjgl.input.Keyboard.KEY_ESCAPE) {
+                                advancedMiniGuiOpen = false;
+                            }
+                        } else if (advancedSelection == 2) { // RAM
+                            int maxIdx = RAM_CHOICES_MB.length - 1;
+                            if (key == org.lwjgl.input.Keyboard.KEY_LEFT && miniGuiValueIndex > 0) {
+                                miniGuiValueIndex--;
+                            } else if (key == org.lwjgl.input.Keyboard.KEY_RIGHT && miniGuiValueIndex < maxIdx) {
+                                miniGuiValueIndex++;
+                            } else if (key == org.lwjgl.input.Keyboard.KEY_RETURN) {
+                                bios.setAllocatedRamMB(RAM_CHOICES_MB[miniGuiValueIndex]);
+                                bios.saveConfigToJson();
+                                advancedMiniGuiOpen = false;
+                            } else if (key == org.lwjgl.input.Keyboard.KEY_ESCAPE) {
+                                advancedMiniGuiOpen = false;
+                            }
                         }
                     }
                 }
-                // ESC pour retour à l'écran de post
-                if (key == org.lwjgl.input.Keyboard.KEY_ESCAPE) {
+                if (!advancedMiniGuiOpen) {
+                    if (bios.getBiosTabIndex() == 1) {
+
+                    } else if (bios.getBiosTabIndex() == 3 && key == org.lwjgl.input.Keyboard.KEY_RETURN && bios.isUpdateAvailable() && !bios.isUpdateInProgress()) {
+
+                    } else if (bios.getBiosTabIndex() == 4) { // Exit tab
+                        if (key == org.lwjgl.input.Keyboard.KEY_UP) {
+                            bios.setExitSelection((bios.getExitSelection() + 1) % 2);
+                        } else if (key == org.lwjgl.input.Keyboard.KEY_DOWN) {
+                            bios.setExitSelection((bios.getExitSelection() + 1) % 2);
+                        } else if (key == org.lwjgl.input.Keyboard.KEY_RETURN) {
+                            if (bios.getExitSelection() == 0) {
+                                bios.saveConfigToJson();
+                            }
+                            org.lwjgl.opengl.Display.destroy();
+                            System.exit(0);
+                        }
+                    }
+                }
+                if (key == org.lwjgl.input.Keyboard.KEY_ESCAPE && !advancedMiniGuiOpen) {
                     bios.showPostScreen();
                     return;
                 }
-                // Plein écran
-                if (key == org.lwjgl.input.Keyboard.KEY_F11) {
+                if (key == org.lwjgl.input.Keyboard.KEY_F11 && !advancedMiniGuiOpen) {
                     bios.toggleFullscreen();
                 }
             }
