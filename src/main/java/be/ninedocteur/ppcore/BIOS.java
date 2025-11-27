@@ -1,31 +1,24 @@
 package be.ninedocteur.ppcore;
 
-import org.lwjgl.LWJGLException;
+import be.ninedocteur.ppcore.screens.PostScreen;
+import be.ninedocteur.ppcore.screens.BIOSScreen;
+import be.ninedocteur.ppcore.screens.BootMenuScreen;
+import be.ninedocteur.ppcore.screens.NoBootableSystemScreen;
+import be.ninedocteur.ppcore.utils.Screen;import be.ninedocteur.ppcore.utils.TextRenderer;import be.ninedocteur.ppcore.utils.Updater;import org.lwjgl.LWJGLException;
 import org.lwjgl.input.Keyboard;
 import org.lwjgl.opengl.Display;
 import org.lwjgl.opengl.DisplayMode;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.PixelFormat;
-
 import java.io.File;
-import java.io.FileWriter;
-import java.io.FileReader;
-import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Collections;
-import java.util.Comparator;
-import java.util.stream.Collectors;
-import com.google.gson.JsonObject;
-import com.google.gson.JsonElement;
-import com.google.gson.JsonParser;
-import com.google.gson.Gson;
+import be.ninedocteur.ppcore.utils.UpdateManager;
 
 public class BIOS {
     private boolean fullscreen = true;
     private final int windowedWidth = 1280;
     private final int windowedHeight = 720;
-    private boolean biosMode = false;
     private int biosTabIndex = 0;
     private static final String[] BIOS_TABS = {"Informations", "Boot", "Advanced", "Updates", "Exit"};
     private boolean updateAvailable = false;
@@ -39,29 +32,35 @@ public class BIOS {
     private boolean bootOrderChanged = false;
     private boolean showBootText = true;
     private long splashStartTime = 0;
-    private boolean noBootableSystem = false;
     private boolean forceRedraw = false;
     private int exitSelection = 0; // 0: save & exit, 1: exit without saving
-    private boolean bootMenuActive = false;
     private int bootMenuSelection = 0;
 
     private boolean intelXeBugDetected = false;
     private static final String INTEL_XE_WARNING = "Warning! We detected that you have a Intel Xe Graphics Card, please note that a bug has been detected on version 32.0.101.7077 of the GPU Driver which may cause problems with OpenGL";
 
+
+    private BootOrderManager bootOrderManager = new BootOrderManager();
+    private DiskScanner diskScanner = new DiskScanner();
+    private Screen currentScreen;
+
     public void run() {
-        loadBootOrderConfig();
-        scanDisks();
+        bootOrderManager.loadBootOrderConfig();
+        detectedDisks = diskScanner.scanDisks();
+        bootOrder = bootOrderManager.getBootOrder();
+        bootOrderManager.sortDetectedDisks(detectedDisks);
         init();
         detectIntelXeBug();
         splashStartTime = System.currentTimeMillis();
         showBootText = true;
+        currentScreen = new PostScreen(this, intelXeBugDetected, INTEL_XE_WARNING, showBootText);
         loop();
         Display.destroy();
     }
 
     private void detectIntelXeBug() {
-        String gpuName = org.lwjgl.opengl.GL11.glGetString(org.lwjgl.opengl.GL11.GL_RENDERER);
-        String glVersion = org.lwjgl.opengl.GL11.glGetString(org.lwjgl.opengl.GL11.GL_VERSION);
+        String gpuName = GL11.glGetString(GL11.GL_RENDERER);
+        String glVersion = GL11.glGetString(GL11.GL_VERSION);
         if (gpuName != null && gpuName.contains("Intel(R) Iris(R) Xe Graphics") && glVersion != null && glVersion.contains("32.0.101.7077")) {
             intelXeBugDetected = true;
         }
@@ -98,7 +97,7 @@ public class BIOS {
         GL11.glLoadIdentity();
     }
 
-    private void toggleFullscreen() {
+    public void toggleFullscreen() {
         try {
             fullscreen = !fullscreen;
             setDisplayMode(fullscreen);
@@ -127,50 +126,18 @@ public class BIOS {
             GL11.glClearColor(0f, 0f, 0f, 1f);
             GL11.glClear(GL11.GL_COLOR_BUFFER_BIT | GL11.GL_DEPTH_BUFFER_BIT);
             setOrtho();
-            if (bootMenuActive) {
-                renderBootMenu();
-            } else if (noBootableSystem) {
-                renderNoBootableSystem();
-            } else if (!biosMode) {
-                long elapsed = System.currentTimeMillis() - splashStartTime;
-                showBootText = elapsed < 5000;
-                renderSplashScreen();
-                if (!showBootText && !booted && elapsed > 6000) {
-                    if (Main.bootExternalOS(new String[0])) {
-                        break;
-                    } else {
-                        noBootableSystem = true;
-                    }
-                    booted = true;
-                }
-            } else {
-                renderBiosScreen();
+            if (currentScreen != null) {
+                currentScreen.render();
             }
             Display.update();
-            handleInput();
-        }
-    }
-
-    private List<String> wrapTextToWidth(String text, java.awt.Font font, float maxWidth) {
-        List<String> lines = new ArrayList<>();
-        String[] words = text.split(" ");
-        StringBuilder currentLine = new StringBuilder();
-        for (String word : words) {
-            String testLine = currentLine.length() == 0 ? word : currentLine + " " + word;
-            float lineWidth = TextRenderer.getTextWidth(testLine, font);
-            if (lineWidth > maxWidth && currentLine.length() > 0) {
-                lines.add(currentLine.toString());
-                currentLine = new StringBuilder(word);
-            } else {
-                if (currentLine.length() > 0) currentLine.append(" ");
-                currentLine.append(word);
+            if (currentScreen != null) {
+                currentScreen.handleInput();
             }
+            // Transition vers BIOSScreen, BootMenuScreen, etc. à ajouter plus tard
         }
-        if (currentLine.length() > 0) lines.add(currentLine.toString());
-        return lines;
     }
 
-    private void renderSplashScreen() {
+    public void renderSplashScreen() {
         int w = Display.getWidth();
         int h = Display.getHeight();
         float mainFontSize = Math.max(24, h / 10f);
@@ -195,7 +162,7 @@ public class BIOS {
             float rectX = 40;
             float rectY = 10;
             float rectW = w - 80;
-            List<String> lines = wrapTextToWidth(INTEL_XE_WARNING, warnFont, rectW - 20);
+            List<String> lines = TextRenderer.wrapTextToWidth(INTEL_XE_WARNING, warnFont, rectW - 20);
             float lineHeight = warnFont.getSize2D() + 4;
             float rectH = lines.size() * lineHeight + 40;
             GL11.glColor3f(1f, 0f, 0f);
@@ -237,303 +204,29 @@ public class BIOS {
         }
     }
 
-    private void renderBiosScreen() {
-        int w = Display.getWidth();
-        int h = Display.getHeight();
-        GL11.glClearColor(0.07f, 0.13f, 0.45f, 1f);
-        GL11.glClear(GL11.GL_COLOR_BUFFER_BIT);
-        float tabFontSize = Math.max(18, h / 28f);
-        float contentFontSize = Math.max(16, h / 36f);
-        java.awt.Font tabFont, contentFont;
-        try {
-            tabFont = java.awt.Font.createFont(java.awt.Font.TRUETYPE_FONT, getClass().getResourceAsStream("/VGA.ttf")).deriveFont(tabFontSize);
-            contentFont = java.awt.Font.createFont(java.awt.Font.TRUETYPE_FONT, getClass().getResourceAsStream("/VGA.ttf")).deriveFont(contentFontSize);
-        } catch (Exception e) {
-            tabFont = new java.awt.Font("Monospaced", java.awt.Font.PLAIN, (int)tabFontSize);
-            contentFont = new java.awt.Font("Monospaced", java.awt.Font.PLAIN, (int)contentFontSize);
-        }
-        float tabX = 40;
-        float tabY = 30;
-        for (int i = 0; i < BIOS_TABS.length; i++) {
-            String tab = BIOS_TABS[i];
-            java.awt.Color color = (i == biosTabIndex) ? java.awt.Color.YELLOW : java.awt.Color.WHITE;
-            TextRenderer.drawText(tab, tabX, tabY, tabFont, color);
-            tabX += TextRenderer.getTextWidth(tab, tabFont) + 60;
-        }
-        float boxX = 30, boxY = 60, boxW = w - 60, boxH = h - 90;
-        GL11.glColor3f(1f, 1f, 1f);
-        GL11.glLineWidth(2f);
-        GL11.glBegin(GL11.GL_LINE_LOOP);
-        GL11.glVertex2f(boxX, boxY);
-        GL11.glVertex2f(boxX + boxW, boxY);
-        GL11.glVertex2f(boxX + boxW, boxY + boxH);
-        GL11.glVertex2f(boxX, boxY + boxH);
-        GL11.glEnd();
-        if (biosTabIndex == 0) renderBiosInfoTab(contentFont, boxX + 20, boxY + 30);
-        else if (biosTabIndex == 1) renderBiosBootTab(contentFont, boxX + 20, boxY + 30, boxW - 40);
-        else if (biosTabIndex == 3) renderBiosUpdatesTab(contentFont, boxX + 20, boxY + 30, boxW - 40);
-        else if (biosTabIndex == 4) renderBiosExitTab(contentFont, boxX + 20, boxY + 30);
+    public void showPostScreen() {
+        showBootText = true;
+        splashStartTime = System.currentTimeMillis();
+        currentScreen = new PostScreen(this, intelXeBugDetected, INTEL_XE_WARNING, showBootText);
     }
-
-    private void renderBiosInfoTab(java.awt.Font font, float x, float y) {
-        int line = 0;
-        if (intelXeBugDetected) {
-            float warnFontSize = Math.max(14, font.getSize2D());
-            java.awt.Font warnFont;
-            try {
-                warnFont = java.awt.Font.createFont(java.awt.Font.TRUETYPE_FONT, getClass().getResourceAsStream("/VGA.ttf")).deriveFont(warnFontSize);
-            } catch (Exception e) {
-                warnFont = new java.awt.Font("Monospaced", java.awt.Font.PLAIN, (int)warnFontSize);
-            }
-            float rectX = x;
-            float rectY = y;
-            float rectW = 700;
-            List<String> lines = wrapTextToWidth(INTEL_XE_WARNING, warnFont, rectW - 20);
-            float lineHeight = warnFont.getSize2D() + 4;
-            float rectH = lines.size() * lineHeight + 40;
-            GL11.glColor3f(1f, 0f, 0f);
-            GL11.glBegin(GL11.GL_QUADS);
-            GL11.glVertex2f(rectX, rectY);
-            GL11.glVertex2f(rectX + rectW, rectY);
-            GL11.glVertex2f(rectX + rectW, rectY + rectH);
-            GL11.glVertex2f(rectX, rectY + rectH);
-            GL11.glEnd();
-            GL11.glColor3f(1f, 1f, 1f);
-            GL11.glLineWidth(2f);
-            GL11.glBegin(GL11.GL_LINE_LOOP);
-            GL11.glVertex2f(rectX, rectY);
-            GL11.glVertex2f(rectX + rectW, rectY);
-            GL11.glVertex2f(rectX + rectW, rectY + rectH);
-            GL11.glVertex2f(rectX, rectY + rectH);
-            GL11.glEnd();
-            float textY = rectY + 10 + warnFont.getSize2D();
-            for (String lineStr : lines) {
-                float textW = TextRenderer.getTextWidth(lineStr, warnFont);
-                float textX = rectX + (rectW - textW) / 2f;
-                TextRenderer.drawText(lineStr, textX, textY, warnFont, java.awt.Color.WHITE);
-                textY += lineHeight;
-            }
-            y += rectH + 10;
-        }
-        String cpuName = System.getProperty("os.arch");
-        String cpuInfo = "CPU: " + cpuName;
-        String gpuName = org.lwjgl.opengl.GL11.glGetString(org.lwjgl.opengl.GL11.GL_RENDERER);
-        String gpuInfo = "GPU: " + (gpuName != null ? gpuName : "Java OpenGL");
-        String gpuDriverVersion = org.lwjgl.opengl.GL11.glGetString(org.lwjgl.opengl.GL11.GL_VERSION);
-        String gpuDriverInfo = "Version driver GPU: " + (gpuDriverVersion != null ? gpuDriverVersion : "N/A");
-
-        long maxMem = Runtime.getRuntime().maxMemory() / (1024 * 1024);
-        long totalMem = Runtime.getRuntime().totalMemory() / (1024 * 1024);
-        long freeMem = Runtime.getRuntime().freeMemory() / (1024 * 1024);
-        long usedMem = totalMem - freeMem;
-        String ramInfo = String.format("RAM JVM: %d MB (utilisée: %d MB / max: %d MB)", totalMem, usedMem, maxMem);
-
-        String javaInfo = "Java: " + System.getProperty("java.version");
-
-        int ramPercent = (int) ((usedMem * 100) / maxMem);
-        String ramUsage = String.format("Utilisation RAM: %d%%", ramPercent);
-
-        String cpuUsage = "Utilisation CPU: N/A";
-        try {
-            com.sun.management.OperatingSystemMXBean osBean =
-                (com.sun.management.OperatingSystemMXBean) java.lang.management.ManagementFactory.getOperatingSystemMXBean();
-            double cpuLoad = osBean.getProcessCpuLoad();
-            if (cpuLoad >= 0) {
-                cpuUsage = String.format("Utilisation CPU: %.1f%%", cpuLoad * 100);
-            }
-        } catch (Exception ignored) {}
-
-        String gpuUsage = "Utilisation GPU: N/A";
-
-
-        String space = "     ";
-
-        String header = "=== Populaire Core BIOS Informations ===";
-        String version = "Version BIOS: " + PPCoreSharedConstant.version;
-        String[] infos = {cpuInfo, gpuInfo, gpuDriverInfo, ramInfo, javaInfo, ramUsage, cpuUsage, gpuUsage, space, header, version};
-        for (String info : infos) {
-            TextRenderer.drawText(info, x, y + line * (font.getSize2D() + 10), font, java.awt.Color.WHITE);
-            line++;
-        }
+    public void showBiosScreen() {
+        currentScreen = new BIOSScreen(this);
     }
-
-    private void renderBiosUpdatesTab(java.awt.Font font, float x, float y, float w) {
-        String jsonUrl = "https://raw.githubusercontent.com/OpenDeskOS-Team/OpenDesk-Updater/refs/heads/main/update_index.json";
-        String project = "ppcore";
-        String localVersion = PPCoreSharedConstant.version;
-        if (remoteVersion == null && !updateInProgress) {
-            updateMessage = "Vérification de la version distante...";
-
-            new Thread(() -> {
-                try {
-                    String json = Updater.readUrlToString(jsonUrl);
-                    remoteVersion = BIOS.extractRemoteVersion(json, project);
-                    updateAvailable = (remoteVersion != null && !remoteVersion.equals(localVersion));
-                    updateMessage = updateAvailable ? ("Nouvelle version disponible: " + remoteVersion + " (Entrée pour mettre à jour)") : "Votre version est à jour.";
-                } catch (Exception e) {
-                    updateMessage = "Erreur lors de la vérification: " + e.getMessage();
-                }
-            }).start();
-        }
-        TextRenderer.drawText("Mise à jour PopulaireCoreGL", x, y, font, java.awt.Color.YELLOW);
-        TextRenderer.drawText("Version locale: " + localVersion, x, y + font.getSize2D() + 10, font, java.awt.Color.WHITE);
-        TextRenderer.drawText("Version distante: " + (remoteVersion != null ? remoteVersion : "..."), x, y + 2 * (font.getSize2D() + 10), font, java.awt.Color.WHITE);
-        TextRenderer.drawText(updateMessage != null ? updateMessage : "", x, y + 3 * (font.getSize2D() + 10), font, java.awt.Color.CYAN);
-        if (updateInProgress) {
-            TextRenderer.drawText("Téléchargement et installation en cours...", x, y + 5 * (font.getSize2D() + 10), font, java.awt.Color.ORANGE);
-        }
+    public void showBootMenuScreen() {
+        currentScreen = new BootMenuScreen(this);
     }
-
-    private void renderBiosBootTab(java.awt.Font font, float x, float y, float w) {
-        TextRenderer.drawText("Boot Order (haut/bas pour changer, Entrée pour sauvegarder)", x, y, font, java.awt.Color.YELLOW);
-        int line = 1;
-        for (int i = 0; i < detectedDisks.size(); i++) {
-            File disk = detectedDisks.get(i);
-            String name = disk.getParentFile().getName() + ": " + disk.getName();
-            java.awt.Color color = (i == bootOrderSelection) ? java.awt.Color.CYAN : java.awt.Color.WHITE;
-            TextRenderer.drawText((i+1)+". "+name, x, y + line * (font.getSize2D() + 10), font, color);
-            line++;
-        }
-        if (bootOrderChanged) {
-            TextRenderer.drawText("(Non sauvegardé)", x, y + (line+1) * (font.getSize2D() + 10), font, java.awt.Color.ORANGE);
-        }
-    }
-
-    private void renderBiosExitTab(java.awt.Font font, float x, float y) {
-        String[] options = {
-            "Exit saving changes (enregistre, quitte le BIOS, redémarre)",
-            "Exit without saving changes (quitte le BIOS, redémarre)"
-        };
-        for (int i = 0; i < options.length; i++) {
-            java.awt.Color color = (i == exitSelection) ? java.awt.Color.YELLOW : java.awt.Color.WHITE;
-            TextRenderer.drawText(options[i], x, y + i * (font.getSize2D() + 20), font, color);
-        }
-        TextRenderer.drawText("Utilise Haut/Bas pour choisir, Entrée pour valider.", x, y + options.length * (font.getSize2D() + 30), font, java.awt.Color.CYAN);
-    }
-
-    private void renderNoBootableSystem() {
-        int w = Display.getWidth();
-        int h = Display.getHeight();
-        float fontSize = Math.max(18, h / 28f);
-        java.awt.Font font;
-        try {
-            font = java.awt.Font.createFont(java.awt.Font.TRUETYPE_FONT, getClass().getResourceAsStream("/VGA.ttf")).deriveFont(fontSize);
-        } catch (Exception e) {
-            font = new java.awt.Font("Monospaced", java.awt.Font.PLAIN, (int)fontSize);
-        }
-        TextRenderer.drawText("No bootable system found!", 20, 30, font, java.awt.Color.RED);
-    }
-
-    private void renderBootMenu() {
-        int w = Display.getWidth();
-        int h = Display.getHeight();
-        float fontSize = Math.max(18, h / 28f);
-        java.awt.Font font;
-        try {
-            font = java.awt.Font.createFont(java.awt.Font.TRUETYPE_FONT, getClass().getResourceAsStream("/VGA.ttf")).deriveFont(fontSize);
-        } catch (Exception e) {
-            font = new java.awt.Font("Monospaced", java.awt.Font.PLAIN, (int)fontSize);
-        }
-        String title = "Boot Menu (F12)";
-        TextRenderer.drawText(title, 40, 40, font, java.awt.Color.YELLOW);
-        TextRenderer.drawText("Utilise Haut/Bas pour choisir, Entrée pour booter", 40, 80, font, java.awt.Color.CYAN);
-        for (int i = 0; i < detectedDisks.size(); i++) {
-            File disk = detectedDisks.get(i);
-            String name = disk.getParentFile().getName() + ": " + disk.getName();
-            java.awt.Color color = (i == bootMenuSelection) ? java.awt.Color.GREEN : java.awt.Color.WHITE;
-            TextRenderer.drawText((i+1)+". "+name, 60, 120 + i * (font.getSize2D() + 10), font, color);
-        }
+    public void showNoBootableSystemScreen() {
+        currentScreen = new NoBootableSystemScreen(this);
     }
 
     private void handleInput() {
-        while (Keyboard.next()) {
-            if (Keyboard.getEventKeyState()) {
-                if (bootMenuActive) {
-                    if (Keyboard.getEventKey() == Keyboard.KEY_UP) {
-                        if (bootMenuSelection > 0) bootMenuSelection--;
-                    } else if (Keyboard.getEventKey() == Keyboard.KEY_DOWN) {
-                        if (bootMenuSelection < detectedDisks.size() - 1) bootMenuSelection++;
-                    } else if (Keyboard.getEventKey() == Keyboard.KEY_RETURN && detectedDisks.size() > 0) {
-
-                        File disk = detectedDisks.get(bootMenuSelection);
-                        Main.bootExternalOS(new String[]{disk.getAbsolutePath()});
-                        bootMenuActive = false;
-                    } else if (Keyboard.getEventKey() == Keyboard.KEY_ESCAPE) {
-                        bootMenuActive = false;
-                    }
-                    return;
-                }
-                if (!biosMode && (Keyboard.getEventKey() == Keyboard.KEY_F2 || Keyboard.getEventKey() == Keyboard.KEY_DELETE)) {
-                    biosMode = true;
-                } else if (!biosMode && Keyboard.getEventKey() == Keyboard.KEY_F12) {
-                    bootMenuActive = true;
-                    bootMenuSelection = 0;
-                } else if (biosMode) {
-                    if (Keyboard.getEventKey() == Keyboard.KEY_LEFT) {
-                        biosTabIndex = (biosTabIndex + BIOS_TABS.length - 1) % BIOS_TABS.length;
-                    } else if (Keyboard.getEventKey() == Keyboard.KEY_RIGHT) {
-                        biosTabIndex = (biosTabIndex + 1) % BIOS_TABS.length;
-                    } else if (biosTabIndex == 1) {
-
-                        if (Keyboard.getEventKey() == Keyboard.KEY_UP) {
-                            if (bootOrderSelection > 0) {
-                                Collections.swap(detectedDisks, bootOrderSelection, bootOrderSelection - 1);
-                                bootOrderSelection--;
-                                bootOrderChanged = true;
-                            }
-                        } else if (Keyboard.getEventKey() == Keyboard.KEY_DOWN) {
-                            if (bootOrderSelection < detectedDisks.size() - 1) {
-                                Collections.swap(detectedDisks, bootOrderSelection, bootOrderSelection + 1);
-                                bootOrderSelection++;
-                                bootOrderChanged = true;
-                            }
-                        } else if (Keyboard.getEventKey() == Keyboard.KEY_RETURN && bootOrderChanged) {
-                            saveBootOrderConfig();
-                            bootOrderChanged = false;
-                        }
-                    } else if (biosTabIndex == 3 && Keyboard.getEventKey() == Keyboard.KEY_RETURN && updateAvailable && !updateInProgress) {
-
-                        updateInProgress = true;
-                        updateMessage = "Téléchargement en cours...";
-                        new Thread(() -> {
-                            try {
-                                Updater.downloadLastVersion(
-                                    "https://raw.githubusercontent.com/OpenDeskOS-Team/OpenDesk-Updater/refs/heads/main/update_index.json",
-                                    "ppcore",
-                                    new java.io.File(BIOS.class.getProtectionDomain().getCodeSource().getLocation().toURI()).getPath()
-                                );
-                                updateMessage = "Mise à jour terminée. Redémarrage...";
-                                relaunchWithUpdatedJar();
-                            } catch (Exception e) {
-                                updateMessage = "Erreur MAJ: " + e.getMessage();
-                                updateInProgress = false;
-                            }
-                        }).start();
-                    } else if (biosTabIndex == 4) {
-
-                        if (Keyboard.getEventKey() == Keyboard.KEY_UP) {
-                            exitSelection = (exitSelection + 1) % 2;
-                        } else if (Keyboard.getEventKey() == Keyboard.KEY_DOWN) {
-                            exitSelection = (exitSelection + 1) % 2;
-                        } else if (Keyboard.getEventKey() == Keyboard.KEY_RETURN) {
-                            if (exitSelection == 0) {
-                                saveBootOrderConfig();
-                                restart();
-                            } else {
-                                restart();
-                            }
-                        }
-                    }
-                }
-                if (Keyboard.getEventKey() == Keyboard.KEY_F11) {
-                    toggleFullscreen();
-                }
-            }
+        // La gestion de l'input est maintenant entièrement déléguée à l'écran courant
+        if (currentScreen != null) {
+            currentScreen.handleInput();
         }
     }
 
     public void restart() {
-        biosMode = false;
         biosTabIndex = 0;
         updateAvailable = false;
         remoteVersion = null;
@@ -544,10 +237,10 @@ public class BIOS {
         bootOrderChanged = false;
         showBootText = true;
         splashStartTime = System.currentTimeMillis();
-        noBootableSystem = false;
         forceRedraw = true;
-        loadBootOrderConfig();
-        scanDisks();
+        bootOrderManager.loadBootOrderConfig();
+        detectedDisks = diskScanner.scanDisks();
+        bootOrder = bootOrderManager.getBootOrder();
         // DO NOT CALL init() neither Display.create()
         splashStartTime = System.currentTimeMillis();
         showBootText = true;
@@ -560,8 +253,8 @@ public class BIOS {
             GL11.glClearColor(0f, 0f, 0f, 1f);
             GL11.glClear(GL11.GL_COLOR_BUFFER_BIT | GL11.GL_DEPTH_BUFFER_BIT);
             Display.update();
-            while (org.lwjgl.input.Keyboard.next()) {
-                if (org.lwjgl.input.Keyboard.getEventKeyState() && org.lwjgl.input.Keyboard.getEventKey() == org.lwjgl.input.Keyboard.KEY_F1) {
+            while (Keyboard.next()) {
+                if (Keyboard.getEventKeyState() && Keyboard.getEventKey() == Keyboard.KEY_F1) {
                     restart();
                     return;
                 }
@@ -570,91 +263,42 @@ public class BIOS {
         // DO NOT CALL Display.destroy() here
     }
 
-    public static String extractRemoteVersion(String json, String projectName) {
-        JsonObject root = JsonParser.parseString(json).getAsJsonObject();
-        if (!root.has("projets")) return null;
-        JsonObject projets = root.getAsJsonObject("projets");
-        if (!projets.has(projectName)) return null;
-        JsonObject project = projets.getAsJsonObject(projectName);
-        if (!project.has("current_version")) return null;
-        return project.get("current_version").getAsString();
-    }
 
-    public static Update getUpdateInfo(String json) {
-        return new Gson().fromJson(json, Update.class);
-    }
+    public int getBiosTabIndex() { return biosTabIndex; }
+    public void setBiosTabIndex(int value) { this.biosTabIndex = value; }
+    public static String[] getBiosTabs() { return BIOS_TABS; }
+    public int getBootOrderSelection() { return bootOrderSelection; }
+    public void setBootOrderSelection(int value) { this.bootOrderSelection = value; }
+    public boolean isBootOrderChanged() { return bootOrderChanged; }
+    public void setBootOrderChanged(boolean value) { this.bootOrderChanged = value; }
+    public boolean isUpdateAvailable() { return updateAvailable; }
+    public void setUpdateAvailable(boolean value) { this.updateAvailable = value; }
+    public boolean isUpdateInProgress() { return updateInProgress; }
+    public void setUpdateInProgress(boolean value) { this.updateInProgress = value; }
+    public String getUpdateMessage() { return updateMessage; }
+    public void setUpdateMessage(String value) { this.updateMessage = value; }
+    public int getExitSelection() { return exitSelection; }
+    public void setExitSelection(int value) { this.exitSelection = value; }
+    public void saveBootOrderConfig() { bootOrderManager.saveBootOrderConfig(detectedDisks); bootOrder = bootOrderManager.getBootOrder(); }
+    public void relaunchWithUpdatedJar() { try { String javaBin = System.getProperty("java.home") + File.separator + "bin" + File.separator + "java"; String jarPath = new File(BIOS.class.getProtectionDomain().getCodeSource().getLocation().toURI()).getPath(); new ProcessBuilder(javaBin, "-jar", jarPath).start(); System.exit(0); } catch (Exception e) { updateMessage = "Erreur lors du redémarrage: " + e.getMessage(); } }
 
-    private void relaunchWithUpdatedJar() {
-        try {
-            String javaBin = System.getProperty("java.home") + java.io.File.separator + "bin" + java.io.File.separator + "java";
-            String jarPath = new java.io.File(BIOS.class.getProtectionDomain().getCodeSource().getLocation().toURI()).getPath();
-            new ProcessBuilder(javaBin, "-jar", jarPath).start();
-            System.exit(0);
-        } catch (Exception e) {
-            updateMessage = "Erreur lors du redémarrage: " + e.getMessage();
-        }
+    // Getters pour accès depuis d'autres classes
+    public boolean isIntelXeBugDetected() {
+        return intelXeBugDetected;
     }
-
-    private void scanDisks() {
-        detectedDisks.clear();
-        File disksDir = new File(System.getProperty("user.dir"), "disks");
-        File cdDir = new File(System.getProperty("user.dir"), "cd");
-        disksDir.mkdirs();
-        cdDir.mkdirs();
-        File[] diskJars = disksDir.listFiles((d, name) -> name.toLowerCase().endsWith(".jar"));
-        File[] cdJars = cdDir.listFiles((d, name) -> name.toLowerCase().endsWith(".jar"));
-        if (diskJars != null) Collections.addAll(detectedDisks, diskJars);
-        if (cdJars != null) Collections.addAll(detectedDisks, cdJars);
-        if (!bootOrder.isEmpty()) {
-            detectedDisks.sort(Comparator.comparingInt(f -> {
-                String diskPath = f.getAbsolutePath().replace("/", "\\").toLowerCase();
-                int idx = -1;
-                for (int i = 0; i < bootOrder.size(); i++) {
-                    String orderPath = bootOrder.get(i).replace("/", "\\").toLowerCase();
-                    if (diskPath.equals(orderPath)) {
-                        idx = i;
-                        break;
-                    }
-                }
-                return idx >= 0 ? idx : Integer.MAX_VALUE;
-            }));
-        }
+    public static String getIntelXeWarning() {
+        return INTEL_XE_WARNING;
     }
-
-    private void loadBootOrderConfig() {
-        bootOrder.clear();
-        File config = new File(System.getProperty("user.dir"), CONFIG_FILE);
-        if (!config.exists()) return;
-        try (FileReader fr = new FileReader(config)) {
-            StringBuilder sb = new StringBuilder();
-            int c;
-            while ((c = fr.read()) != -1) sb.append((char)c);
-            String json = sb.toString();
-            int keyIdx = json.indexOf("\"bootOrder\"");
-            if (keyIdx >= 0) {
-                int arrStart = json.indexOf('[', keyIdx);
-                int arrEnd = json.indexOf(']', arrStart);
-                if (arrStart >= 0 && arrEnd > arrStart) {
-                    String arr = json.substring(arrStart + 1, arrEnd);
-                    for (String s : arr.split(",")) {
-                        String path = s.trim().replaceAll("^\"|\"$", "");
-                        if (!path.isEmpty()) bootOrder.add(path);
-                    }
-                }
-            }
-        } catch (IOException ignored) {}
+    public int getBootMenuSelection() {
+        return bootMenuSelection;
     }
-
-    private void saveBootOrderConfig() {
-        bootOrder = detectedDisks.stream().map(File::getAbsolutePath).collect(Collectors.toList());
-        File config = new File(System.getProperty("user.dir"), CONFIG_FILE);
-        try (FileWriter fw = new FileWriter(config)) {
-            fw.write("{\n  \"bootOrder\": [\n");
-            for (int i = 0; i < bootOrder.size(); i++) {
-                fw.write("    \"" + bootOrder.get(i).replace("\\", "\\\\") + "\"");
-                if (i < bootOrder.size() - 1) fw.write(",\n");
-            }
-            fw.write("\n  ]\n}\n");
-        } catch (IOException ignored) {}
+    public void setBootMenuSelection(int selection) {
+        this.bootMenuSelection = selection;
+    }
+    public List<File> getDetectedDisks() {
+        return detectedDisks;
+    }
+    public void setDetectedDisks(List<File> disks) {
+        this.detectedDisks = disks;
     }
 }
