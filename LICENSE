@@ -1,0 +1,70 @@
+# OpenDesk Base-Project License — Version 1.0
+
+**Copyright © 2025 OpenDeskTeam**
+All rights reserved.
+
+---
+
+## 1. Usage
+This software may be used freely for **personal and non-commercial purposes**.
+
+---
+
+## 2. Modifications
+You can create, modify, customize the program for aestetic, but please use PopulaireCoreGL as a base to be compatible with other os using PopulaireCoreGL.\
+Improvement proposals can be submitted as **pull requests** on the official repository.
+
+---
+
+## 3. Redistribution
+Redistribution of the base of PopulaireCoreGL **prohibited** without prior written consent from **OpenDeskTeam**. \
+If you modify the program, you can redistribute your modified version under the following conditions:
+- You must provide **clear attribution** to **OpenDeskTeam** as the original author.
+- You must include a copy of this license with any redistributed version.
+- You must state that your version is a **modified version** and not the original.
+- You may not use the name "OpenDeskTeam" or any of its trademarks without prior written permission.
+- Be comptatible with other OS using PopulaireCoreGL as a base.
+---
+
+## 4. Sale
+
+Selling, renting, or any form of direct monetization of this software or its components is **strictly prohibited**. Except if you have modified the program and you are selling your modified version. \
+
+---
+
+## 5. Add-ons, Extensions, and External Modules
+The creation of **add-ons**, **external modules**, **extensions**, or **themes** that interact with this software is **allowed**, provided that such elements:
+
+- do not directly modify the main source code of the software,
+- comply with the terms of this license,
+- clearly state that they are unofficial third-party products.
+
+Developers of add-ons or extensions:
+- retain **full ownership** of their own code,
+- may distribute their creations under **any license they choose**,
+- are solely responsible for their content and distribution.
+
+**OpenDeskTeam** reserves the right to **draw inspiration** from the design or ideas of such add-ons in its own projects, **without copying or directly integrating** their source code.
+
+---
+
+## 6. Contributions
+Voluntary contributions (pull requests, bug reports, suggestions) are **welcome**.
+Any accepted contribution becomes the property of **OpenDeskTeam**, unless explicitly stated otherwise.
+
+Credits can be given to contributors upon request.
+
+---
+
+## 7. Warranty
+The software is provided **“as is”**, without any warranty of any kind.
+The author cannot be held liable for any damage resulting from its use.
+
+---
+
+## 8. Contact
+For authorization, partnership, or redistribution requests, please contact:
+📧 **opendeskteam@loris-populaire.be**
+
+You can contact the OpenDeskTeam for any questions regarding this license or the software itself.
+You can also reach us to know more about reselling or commercial use.
